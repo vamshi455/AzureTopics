@@ -1,3 +1,3 @@
 # AzureTopics
 
-This repo contains the topics we dealt with all the projects till now
+This repo contains the topics in azure data engineering space
