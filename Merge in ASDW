@@ -1,0 +1,124 @@
+/****** Object:  StoredProcedure [lepton_dw].[udsp_mergeStage]    Script Date: 4/19/2021 11:23:03 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROC [lepton_dw].[udsp_mergeStage_working] 
+
+@Schema [varchar](200),
+@FullExtTable [varchar](200),
+@DiffExtTable [varchar](200),
+@FinalTable [varchar](200),
+@PartColumnName VARCHAR(200),
+@PartColumnValue VARCHAR(MAX)
+
+AS 
+-- ==============================================================================================
+-- Author	  : Vamshi Singam
+-- Create date: 9/10/2020
+-- Description: Merge between Ext and Final Stage Tables
+-- Example	  : [udsp_mergeStage] 'Staging','endur_party_ext','endur_party_diff_ext','endur_party'
+-- History    :  
+-- ==============================================================================================
+BEGIN
+
+	DECLARE @FullExtTable [varchar](200) 
+	DECLARE @DiffExtTable [varchar](200)
+	DECLARE @FinalTable [varchar](200)
+	DECLARE @Schema VARCHAR(100)
+	DECLARE @PartColumnName VARCHAR(200)
+	DECLARE @PartColumnValue VARCHAR(MAX)
+
+	SET @Schema          = 'Staging'
+	SET @FullExtTable    = 'endur_party_ext'
+	SET @DiffExtTable    = 'endur_party_diff_ext'
+	SET @FinalTable      = 'endur_party'
+	SET @PartColumnValue = ''
+	SET @PartColumnValue = ''
+	
+	--====================PROC STARTS=======================--
+
+	--Get ObjectId of Ext & Final Stage Tables
+	Declare @ExtObjectID VARCHAR(100)
+	Declare @DiffExtObjectID VARCHAR(100)
+	Declare @FinalObjectID VARCHAR(100)
+	
+	SELECT @ExtObjectID = OBJECT_ID FROM SYS.TABLES WHERE NAME = @FullExtTable
+	SELECT @DiffExtObjectID = OBJECT_ID FROM SYS.TABLES WHERE NAME = @DiffExtTable
+	SELECT @FinalObjectID = OBJECT_ID FROM SYS.TABLES WHERE NAME = @FinalTable
+
+	--Print(@FinalObjectID)
+	IF OBJECT_ID(N'tempdb..#TMP2') IS NOT NULL
+	BEGIN 
+		DROP TABLE #TMP2
+	END
+
+	IF OBJECT_ID(N'tempdb..#TMP1') IS NOT NULL
+	BEGIN
+		DROP TABLE #TMP1
+	END
+
+	--GET SCHEMA
+	SELECT TAB.name AS TableName, TAB.object_id AS ObjectID, COL.name AS ColumnName, TYP.name AS DataTypeName, TYP.max_length AS MaxLength
+	INTO #TMP1
+	FROM sys.columns COL
+	INNER JOIN sys.tables TAB On COL.object_id = TAB.object_id
+	INNER JOIN sys.types TYP ON TYP.user_type_id = COL.user_type_id
+	WHERE TAB.name = @DiffExtTable 
+
+	SELECT TAB.name AS TableName, TAB.object_id AS ObjectID, COL.name AS ColumnName, TYP.name AS DataTypeName, TYP.max_length AS MaxLength
+	INTO #TMP2
+	FROM sys.columns COL
+	INNER JOIN sys.tables TAB On COL.object_id = TAB.object_id
+	INNER JOIN sys.types TYP ON TYP.user_type_id = COL.user_type_id
+	WHERE TAB.name = @FinalTable
+	
+	--COMPARE SCHEMA
+	DECLARE @CNT INT
+	SELECT @CNT = COUNT(1) FROM (SELECT ColumnName, DataTypeName, MaxLength  FROM #TMP1 EXCEPT SELECT ColumnName, DataTypeName, MaxLength FROM #TMP2) A
+
+	DECLARE @SQL VARCHAR(MAX)
+	IF (@CNT = 0) --AND @day0_load = 'N'
+	BEGIN
+		PRINT('SCHEMA MATCH')
+		--Merge Diff into Final		
+		SET @SQL = 'DELETE T FROM ' + @Schema + '.' + @FinalTable + ' T INNER JOIN ' + @Schema +'.' + @DiffExtTable + ' S 
+		ON S.KEYCOLUMNSHASH = T.KEYCOLUMNSHASH AND S.SCDColumnsHash = T.SCDColumnsHash 
+		AND S.SCDRowCreationDate = T.SCDRowCreationDate; 
+					INSERT INTO '+ @Schema +'.' + @FinalTable +' SELECT * FROM '+ @Schema +'.' + @DiffExtTable
+		PRINT('EXECUTING : ' + @SQL)
+		EXEC(@SQL)
+		PRINT('EXECUTED SUCCESSFULLY')
+	END
+	ELSE
+	BEGIN
+		--Get the right distribution before dropping the table
+		DECLARE @DISTRIBUTION VARCHAR(100)
+		SELECT @DISTRIBUTION = DISTRIBUTION_POLICY_DESC FROM sys.pdw_table_distribution_properties where object_id = @FinalObjectID
+		
+		IF (@DISTRIBUTION IS NULL)
+			SET @DISTRIBUTION = 'ROUND_ROBIN'  --SET DEFAULT
+
+		SET @SQL = 'IF OBJECT_ID(''' + @Schema + '.' + @FinalTable + ''',''U'') IS NOT NULL ' + 'DROP TABLE '+  @Schema + '.' + @FinalTable
+		PRINT('EXECUTING : ' + @SQL)
+		EXEC(@SQL)
+		PRINT('EXECUTED SUCCESSFULLY')
+		
+		SET @Schema = 'Staging'
+		
+		-- Recreate Final table based on Full Ext Table BY CTAS
+		SET @SQL = ' CREATE TABLE ' + @Schema + '.' + @FinalTable +
+					' WITH (DISTRIBUTION = ' + @DISTRIBUTION + ' ,CLUSTERED COLUMNSTORE INDEX) AS SELECT * FROM ' + @Schema + '.' + @FullExtTable + ' '
+		PRINT('EXECUTING : ' + @SQL)
+		EXEC(@SQL)
+		PRINT('EXECUTED SUCCESSFULLY')
+
+	END
+END
+
+--SELECT COUNT(1) FROM Staging.endur_party
+--SELECT COUNT(1) FROM Staging.endur_party_ext
+--SELECT COUNT(1) FROM Staging.endur_party_diff_ext
+
+
+
