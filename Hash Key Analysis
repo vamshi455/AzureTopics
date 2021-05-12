@@ -1,0 +1,21 @@
+select object_name(object_id), distribution_policy from sys.pdw_table_distribution_properties where distribution_policy = 2
+
+
+select *
+from dbo.vTableSizes
+where  distribution_policy_name = 'HASH' and two_part_name in
+    (
+    select two_part_name
+    from dbo.vTableSizes
+    where row_count > 0 and distribution_policy_name = 'HASH'
+    group by two_part_name
+    having (max(row_count * 1.000) - min(row_count * 1.000))/max(row_count * 1.000) >= .10
+    )
+order by two_part_name, row_count;
+
+
+DBCC PDW_SHOWSPACEUSED('dw.deal_header_dim_poc_test_hash_key_deal_nbr');
+
+select distinct deal_nbr from dw.deal_header_dim_poc_test_hash_key_deal_nbr
+
+select deal_nbr, count(1) countofrows from dw.deal_header_dim_poc_test_hash_key_deal_nbr group by deal_nbr order by deal_nbr
